@@ -1,1 +1,1 @@
-export const baseUrl = 'https://nexusapi.cloudlabtech.co.uk/api/v1';
+export const baseUrl = 'https://nexusapi.cloudlabtech.co.uk/api/v1'

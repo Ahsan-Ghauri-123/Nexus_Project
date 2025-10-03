@@ -202,7 +202,6 @@ const CurrentProjectsPhases = ({}) => {
 
   return (
     <View style={styles.container}>
-      {/* <Header toggleDrawer={() => navigation.getParent()?.toggleDrawer()}  /> */}
       <Modal
         visible={isModalVisible}
         animationType="slide"

@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, TextInput, FlatList, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TextInput, FlatList, TouchableOpacity, Alert } from 'react-native';
 import React, { useState, useRef, useEffect } from 'react';
 import Header from '../Components/Header';
 import {
@@ -9,6 +9,8 @@ import Ionicons from '@react-native-vector-icons/ionicons';
 import { useNavigation } from '@react-navigation/native';
 import { Image } from 'react-native-animatable';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { baseUrl } from '../utils/Api';
+import { useProjectStore } from '../Store/useProjectStore';
 
 export default function ProjectScreen() {
   const [searchText, setSearchText] = useState('');
@@ -16,84 +18,130 @@ export default function ProjectScreen() {
   const [selectedStatus, setSelectedStatus] = useState('active'); 
   const [projectData, setProjectData] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [apiError, setApiError] = useState(false);
   const dropdownRef = useRef(null);
   const navigation = useNavigation();
+
+  // Zustand store
+  const { setSelectedProjectId, setProjectData: setStoreProjectData } = useProjectStore();
 
   const statusOptions = [
     { label: 'Active', value: 'active' },
     { label: 'Archive', value: 'archive' },
   ];
+
   const fetchProjects = async () => {
     try {
       setLoading(true);
-      const response = await fetch('${baseUrl}projects/query?status=Active');
+      setApiError(false);
+      
+      console.log('Fetching projects from:', `${baseUrl}projects/query?status=Active`);
+      
+      const response = await fetch(`${baseUrl}projects/query?status=Active`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+      });
+      
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      const result = await response.json();
       
-      if (result && result.data) {
-        // Transform API data to match our app format
-        const formattedData = result.data.map(item => ({
-          id: item.id.toString(),
-          title: item.name,
-          profile_picture: item.profile_picture,
-          addressLine1: item.location?.address_line_1 || 'Address not available',
-          addressLine2: item.location?.address_line_2 || '',
-          addressLine3: item.location?.city + ', ' + item.location?.state || 'Australia',
-          image: item.profile_picture ? { uri: item.profile_picture } : require('../assets/images/house.jpg'),
-          project_id: item.id // Save project_id for AsyncStorage
-        }));
+      const result = await response.json();
+      console.log('API Response received:', result);
+      
+      if (result && result.data && Array.isArray(result.data)) {
+        console.log('Number of projects from API:', result.data.length);
+        
+        const formattedData = result.data.map(item => {
+          // Parse location string to extract address components
+          let addressLine1 = 'Address not available';
+          let addressLine2 = '';
+          let addressLine3 = 'Australia';
+
+          if (item.location) {
+            const locationParts = item.location.split(',');
+            if (locationParts.length >= 3) {
+              addressLine1 = locationParts[0]?.trim() || 'Address not available';
+              addressLine2 = locationParts[1]?.trim() || '';
+              addressLine3 = locationParts[2]?.trim() || 'Australia';
+            } else if (locationParts.length === 2) {
+              addressLine1 = locationParts[0]?.trim() || 'Address not available';
+              addressLine2 = locationParts[1]?.trim() || '';
+            } else {
+              addressLine1 = item.location;
+            }
+          }
+
+          // Construct profile picture URL if available
+          let imageSource = require('../assets/images/house.jpg');
+          if (item.profile_picture) {
+            // Check if it's already a full URL or just a filename
+            if (item.profile_picture.startsWith('http')) {
+              imageSource = { uri: item.profile_picture };
+            } else {
+              imageSource = { uri: `${baseUrl}uploads/${item.profile_picture}` };
+            }
+          }
+
+          return {
+            id: item._id, // Use _id from API
+            title: item.name || 'No Name',
+            profile_picture: item.profile_picture,
+            addressLine1: addressLine1,
+            addressLine2: addressLine2,
+            addressLine3: addressLine3,
+            image: imageSource,
+            project_id: item._id, // Use _id as project_id
+            originalData: item // Save original data if needed
+          };
+        });
         
         setProjectData(formattedData);
+        
+        // Also save to Zustand store if needed
+        setStoreProjectData(result.data);
+        
       } else {
         console.log('No data found in response');
         setProjectData([]);
+        setApiError(true);
+        Alert.alert(
+          'No Data',
+          'No projects found in the response.',
+          [{ text: 'OK' }]
+        );
       }
     } catch (error) {
       console.error('API Error:', error);
-      // Fallback to dummy data if API fails
-      setProjectData([
-        {
-          id: '1',
-          title: 'Maya Hill Apartments',
-          addressLine1: '1- - 16 Patricia St',
-          addressLine2: 'Mays Hill NSW 2145',
-          addressLine3: 'Australia', 
-          image: require('../assets/images/house.jpg'),
-          project_id: '1'
-        },
-        {
-          id: '2',
-          title: 'Park Sydney Stage 2',
-          addressLine1: '57 Ashmore Street',
-          addressLine2: 'Erisfineville, New South Wales 2043',
-          addressLine3: 'Australia',
-          image: require('../assets/images/house.jpg'),
-          project_id: '2'
-        },
-        {
-          id: '3',
-          title: 'Oran Park Rest 3',
-          addressLine1: '62 Central Avenue',
-          addressLine2: 'Oran Park, New South Wales 2570',
-          addressLine3: 'Australia',
-          image: require('../assets/images/house.jpg'),
-          project_id: '3'
-        },
-      ]);
+      // Set empty array on error
+      setProjectData([]);
+      setApiError(true);
+      
+      // Show alert for API error
+      Alert.alert(
+        'Connection Error',
+        'Unable to fetch projects. Please check your internet connection and try again.',
+        [{ text: 'OK' }]
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  // Save project_id to AsyncStorage
+  // Save project_id to AsyncStorage and Zustand
   const saveProjectId = async (projectId) => {
     try {
+      // Save to AsyncStorage
       await AsyncStorage.setItem('selected_project_id', projectId.toString());
-      console.log('Project ID saved:', projectId);
+      console.log('Project ID saved to AsyncStorage:', projectId);
       
-      // Optional: You can also save other project details if needed
+      // Save to Zustand
+      setSelectedProjectId(projectId);
+      
+      // Optional: Save other project details to AsyncStorage if needed
       const projectDataToSave = {
         project_id: projectId,
         saved_at: new Date().toISOString()
@@ -119,11 +167,11 @@ export default function ProjectScreen() {
   );
 
   const handleProjectPress = async (item) => {
-    // Save project_id to AsyncStorage
+    // Save project_id to both AsyncStorage and Zustand
     await saveProjectId(item.project_id);
     
     // Navigate based on project
-    if (item.title === 'Oran Park Rest 3') {
+    if (item.title === 'Oran Park Rest 3' || item.title === 'Oran Park Resi 3') {
       navigation.navigate('CurrentProjectsPhases', { 
         project: item,
         project_id: item.project_id 
@@ -144,22 +192,18 @@ export default function ProjectScreen() {
     >
       <View style={styles.projectCard}>
         <Text style={styles.projectTitle}>{item.title}</Text>
-        <View
-          style={{
-            flexDirection: 'row',
-          }}
-        >
+        <View style={styles.cardContent}>
           <Image
             source={item.image}
-            style={{
-              height: hp('6%'),
-              width: wp('20%'),
-              marginRight: wp('4%'), 
-              borderRadius: wp('1%')
+            style={styles.projectImage}
+            resizeMode="cover"
+            onError={(error) => {
+              console.log('Image loading failed for:', item.title, error.nativeEvent);
+              // Fallback to local image if remote image fails
+              item.image = require('../assets/images/house.jpg');
             }}
-            onError={() => console.log('Image loading failed for:', item.title)}
           />
-          <View style={{ flex: 1 }}>
+          <View style={styles.addressContainer}>
             <Text style={styles.projectAddress}>{item.addressLine1}</Text>
             <Text style={styles.projectAddress}>{item.addressLine2}</Text>
             <Text style={styles.projectAddress}>{item.addressLine3}</Text>
@@ -191,6 +235,14 @@ export default function ProjectScreen() {
       <View style={styles.contentWrapper}>
         <Text style={styles.mainTitle}>Alliance Project Group</Text>
 
+        {/* Show API Error Warning */}
+        {apiError && (
+          <View style={styles.errorBanner}>
+            <Ionicons name="warning-outline" size={20} color="#fff" />
+            <Text style={styles.errorText}>Unable to load projects. Please try again.</Text>
+          </View>
+        )}
+
         <View style={styles.headerRow}>
           <Text style={styles.projectsTitle}>Projects</Text>
           <View style={styles.dropdownWrapper}>
@@ -203,9 +255,7 @@ export default function ProjectScreen() {
                 onPress={toggleDropdown}
                 activeOpacity={0.7}
               >
-                <Text
-                  style={styles.dropdownText}
-                >
+                <Text style={styles.dropdownText}>
                   {statusOptions.find(opt => opt.value === selectedStatus)?.label}
                 </Text>
                 <View style={styles.curvedLine} />
@@ -223,10 +273,8 @@ export default function ProjectScreen() {
                       key={option.value}
                       style={[
                         styles.optionItem,
-                        selectedStatus === option.value &&
-                          styles.selectedOption,
-                        index === statusOptions.length - 1 &&
-                          styles.lastOptionItem,
+                        selectedStatus === option.value && styles.selectedOption,
+                        index === statusOptions.length - 1 && styles.lastOptionItem,
                       ]}
                       onPress={() => handleStatusSelect(option.value)}
                       activeOpacity={0.7}
@@ -234,8 +282,7 @@ export default function ProjectScreen() {
                       <Text
                         style={[
                           styles.optionText,
-                          selectedStatus === option.value &&
-                            styles.selectedOptionText,
+                          selectedStatus === option.value && styles.selectedOptionText,
                         ]}
                       >
                         {option.label}
@@ -276,8 +323,23 @@ export default function ProjectScreen() {
 
         {filteredData.length === 0 ? (
           <View style={styles.noDataContainer}>
-            <Text style={styles.noDataText}>No projects found</Text>
-            <Text style={styles.noDataSubText}>Try adjusting your search terms</Text>
+            <Text style={styles.noDataText}>
+              {apiError ? 'Unable to load projects' : 'No projects found'}
+            </Text>
+            <Text style={styles.noDataSubText}>
+              {apiError 
+                ? 'Please check your connection and try again' 
+                : 'Try adjusting your search terms'
+              }
+            </Text>
+            {apiError && (
+              <TouchableOpacity 
+                style={styles.retryButton}
+                onPress={fetchProjects}
+              >
+                <Text style={styles.retryButtonText}>Try Again</Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
           <FlatList
@@ -285,9 +347,7 @@ export default function ProjectScreen() {
             renderItem={renderItem}
             keyExtractor={item => item.id}
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={{
-              paddingBottom: hp('10%'), 
-            }}
+            contentContainerStyle={styles.flatListContent}
             style={{ flex: 1 }}
           />
         )}
@@ -320,6 +380,21 @@ const styles = StyleSheet.create({
     fontFamily: 'Poppins-SemiBold',
     color: '#333',
     marginBottom: hp('1%'),
+  },
+  // Error banner styles
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ff6b6b',
+    padding: wp('3%'),
+    borderRadius: wp('2%'),
+    marginBottom: hp('1%'),
+  },
+  errorText: {
+    color: '#fff',
+    fontSize: hp(1.6),
+    fontFamily: 'Poppins-Medium',
+    marginLeft: wp('2%'),
   },
   headerRow: {
     flexDirection: 'row',
@@ -442,13 +517,28 @@ const styles = StyleSheet.create({
     fontFamily: 'Poppins-Regular',
     color: '#333',
   },
-  flatListContent: { paddingBottom: hp('2%') },
+  flatListContent: { 
+    paddingBottom: hp('10%') 
+  },
   projectCard: {
     backgroundColor: '#fff',
     borderRadius: wp('3%'),
     padding: wp('4%'),
     marginBottom: hp('1%'),
     borderWidth: 0.2,
+    borderColor: '#e0e0e0',
+  },
+  cardContent: {
+    flexDirection: 'row',
+  },
+  projectImage: {
+    height: hp('6%'),
+    width: wp('20%'),
+    marginRight: wp('4%'),
+    borderRadius: wp('1%')
+  },
+  addressContainer: {
+    flex: 1,
   },
   projectTitle: {
     fontSize: hp(2.2),
@@ -483,11 +573,24 @@ const styles = StyleSheet.create({
     fontFamily: 'Poppins-SemiBold',
     color: '#666',
     marginBottom: hp('1%'),
+    textAlign: 'center',
   },
   noDataSubText: {
     fontSize: hp(1.8),
     fontFamily: 'Poppins-Regular',
     color: '#999',
     textAlign: 'center',
+    marginBottom: hp('2%'),
+  },
+  retryButton: {
+    backgroundColor: '#1d9b20',
+    paddingHorizontal: wp('6%'),
+    paddingVertical: hp('1.5%'),
+    borderRadius: wp('2%'),
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontSize: hp(1.8),
+    fontFamily: 'Poppins-SemiBold',
   },
 });
